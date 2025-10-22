@@ -1,0 +1,85 @@
+name: Deploy Airflow Dags
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'dags/**'
+      - 'tool/validate_dags.py'
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-22.04
+
+    env:
+      AIRFLOW_DAG_DIR: ${{ secrets.AIRFLOW_DAG_DIR }}
+      AIRFLOW_RELEASES_DIR: ${{ secrets.AIRFLOW_RELEASES_DIR }}
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_PORT: ${{ secrets.SSH_PORT }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Validate DAGs
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.8'
+      
+      # Install Airflow core for DAG validation
+      - name: Install Airflow core (for validation)
+        run: |
+          pip install "apache-airflow-core==3.0.3" --constraint \
+            "https://raw.githubusercontent.com/apache/airflow/constraints-3.0.3/constraints-3.10.txt"
+          
+      # Validate DAGs
+      - name: Validate DAGs
+        run: |
+          python tool/validate_dags.py
+
+      # publish ssh key
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf "%s" "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_key
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p $SSH_PORT $SSH_HOST >> ~/.ssh/known_hosts
+        
+      # rsync dags to server
+      - name: Deploy DAGs to Airflow server
+        run: |
+          TS=$(date -u +%Y%m%d_%H%M%S)
+          REMOTE_RELEASE="${AIRFLOW_RELEASES_DIR}/${TS}"
+          ssh -i ~/.ssh/id_key -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" "mkdir -p ${REMOTE_RELEASE}"
+          rsync -avz -e "ssh -i ~/.ssh/id_key -p ${SSH_PORT}" --delete \
+            dags/ "${SSH_USER}@${SSH_HOST}:${REMOTE_RELEASE}/"
+          
+          echo "RELEASE_TS=${TS}" >> $GITHUB_ENV
+      
+      # Atomically switches the symbolic link dags->releases/<timestamp>
+      - name: Atomic symlink switch
+        run: |
+          ssh -i ~/.ssh/id_key -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" '\
+            set -e
+            CURRENT_LINK="${AIRFLOW_DAG_DIR}"
+            NEW_RELEASE="${AIRFLOW_RELEASES_DIR}/${RELEASE_TS}"
+            if [ ! -d "${NEW_RELEASE}" ]; then
+              echo "New release directory does not exist: ${NEW_RELEASE}"
+              exit 1
+            fi
+            ln -sfn "${NEW_RELEASE}" "${CURRENT_LINK}"
+            find "${CURRENT_LINK}" -type f -name "*.py" -exec touch {} +
+          '
+      
+      # service health check
+      - name: Airflow service health check
+        run: |
+          ssh -i ~/.ssh/id_key -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" '\
+            set -e
+            docker ps | grep airflow*
+            docker exec airflow_home-airflow-apiserver-1 airflow dags list || \
+          '
+          (echo "Airflow service health check failed" && exit 1)

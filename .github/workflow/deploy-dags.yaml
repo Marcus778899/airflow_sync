@@ -1,4 +1,4 @@
-name: Deploy Airflow Dags
+name: Deploy Airflow DAGs
 
 on:
   push:
@@ -6,80 +6,98 @@ on:
       - main
     paths:
       - 'dags/**'
-      - 'tool/validate_dags.py'
   workflow_dispatch: {}
 
 jobs:
   deploy:
-    runs-on: ubuntu-22.04
+    runs-on: self-hosted
 
     env:
       AIRFLOW_DAG_DIR: ${{ secrets.AIRFLOW_DAG_DIR }}
       AIRFLOW_RELEASES_DIR: ${{ secrets.AIRFLOW_RELEASES_DIR }}
       SSH_HOST: ${{ secrets.SSH_HOST }}
       SSH_USER: ${{ secrets.SSH_USER }}
-      SSH_PORT: ${{ secrets.SSH_PORT }}
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      
-      - name: Validate DAGs
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12.8'
-      
-      # Install Airflow core for DAG validation
-      - name: Install Airflow core (for validation)
-        run: |
-          pip install "apache-airflow-core==3.0.3" --constraint \
-            "https://raw.githubusercontent.com/apache/airflow/constraints-3.0.3/constraints-3.10.txt"
-          
-      # Validate DAGs
-      - name: Validate DAGs
-        run: |
-          python tool/validate_dags.py
 
-      # publish ssh key
-      - name: Setup SSH
-        run: |
-          mkdir -p ~/.ssh
-          printf "%s" "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_key
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -p $SSH_PORT $SSH_HOST >> ~/.ssh/known_hosts
-        
-      # rsync dags to server
-      - name: Deploy DAGs to Airflow server
+      # create release directory and upload DAGs
+      - name: Create release & upload DAGs
         run: |
           TS=$(date -u +%Y%m%d_%H%M%S)
           REMOTE_RELEASE="${AIRFLOW_RELEASES_DIR}/${TS}"
-          ssh -i ~/.ssh/id_key -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" "mkdir -p ${REMOTE_RELEASE}"
-          rsync -avz -e "ssh -i ~/.ssh/id_key -p ${SSH_PORT}" --delete \
-            dags/ "${SSH_USER}@${SSH_HOST}:${REMOTE_RELEASE}/"
-          
-          echo "RELEASE_TS=${TS}" >> $GITHUB_ENV
+          echo "TS=${TS}" >> $GITHUB_ENV
+
+          ssh ${SSH_USER}@${SSH_HOST} "mkdir -p ${REMOTE_RELEASE}"
+          rsync -avz --delete dags/ "airflow@${SSH_HOST}:${REMOTE_RELEASE}/"
+          echo "Uploaded to ${REMOTE_RELEASE}"
+      
+      # validate DAGs inside Airflow container before switching
+      - name: Validate DAGs inside Airflow container (pre-switch)
+        run: |
+          ssh ${SSH_USER}@${SSH_HOST} '\
+            set -e
+            TS="${RELEASE_TS}"
+            [ -z "$TS" ] && TS="${TS}"
+            [ -z "$TS" ] && { echo "TS not set"; exit 1; }
+
+            echo "Finding an Airflow container..."
+            CID=$(docker ps --filter "name=airflow-apiserver" --format "{{.ID}}" | head -n 1)
+            if [ -z "$CID" ]; then
+              echo "No Airflow container found"
+              exit 1
+            fi
+            echo "Container: $CID"
+
+            SUBDIR="/opt/airflow/releases/${TS}"
+            echo "Validating with: airflow dags list --subdir ${SUBDIR}"
+            docker exec "$CID" airflow dags list --subdir "${SUBDIR}" >/tmp/airflow-validate-${TS}.log 2>&1 \
+              && echo "DAG import OK" \
+              || { echo "DAG import failed"; echo "---- LOG ----"; cat /tmp/airflow-validate-${TS}.log; exit 1; }
+          '
       
       # Atomically switches the symbolic link dags->releases/<timestamp>
-      - name: Atomic symlink switch
+      - name: Switch symlink atomically
         run: |
-          ssh -i ~/.ssh/id_key -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" '\
+          ssh ${SSH_USER}@${SSH_HOST} '\
             set -e
             CURRENT_LINK="${AIRFLOW_DAG_DIR}"
             NEW_RELEASE="${AIRFLOW_RELEASES_DIR}/${RELEASE_TS}"
-            if [ ! -d "${NEW_RELEASE}" ]; then
-              echo "New release directory does not exist: ${NEW_RELEASE}"
-              exit 1
-            fi
+
+            echo "Switching symlink: ${CURRENT_LINK} -> ${NEW_RELEASE}"
+            [ -d "${NEW_RELEASE}" ] || { echo "Release not found: ${NEW_RELEASE}"; exit 1; }
+
             ln -sfn "${NEW_RELEASE}" "${CURRENT_LINK}"
             find "${CURRENT_LINK}" -type f -name "*.py" -exec touch {} +
+            echo " Symlink updated successfully"
           '
-      
+
       # service health check
       - name: Airflow service health check
         run: |
-          ssh -i ~/.ssh/id_key -p "${SSH_PORT}" "${SSH_USER}@${SSH_HOST}" '\
+          ssh ${SSH_USER}@${SSH_HOST} '\
             set -e
-            docker ps | grep airflow*
-            docker exec airflow_home-airflow-apiserver-1 airflow dags list || \
+            echo "Checking Airflow container..."
+            CID=$(docker ps --filter "name=airflow-apiserver" --format "{{.ID}}" | head -n 1)
+            if [ -z "$CID" ]; then
+              echo "Airflow container not found!"
+              exit 1
+            fi
+            echo "Found container $CID"
+
+            echo "Verifying DAGs inside container..."
+            docker exec $CID airflow dags list >/dev/null 2>&1 \
+              && echo "Airflow DAGs loaded successfully" \
+              || (echo "Airflow DAGs load failed" && exit 1)
           '
-          (echo "Airflow service health check failed" && exit 1)
+
+      - name: (Optional) Cleanup old releases (keep last 5)
+        run: |
+          ssh ${SSH_USER}@${SSH_HOST} '\
+            set -e
+            echo "Cleaning up old releases, keeping last 5..."
+            cd "${AIRFLOW_RELEASES_DIR}"
+            ls -1t | tail -n +6 | xargs -r rm -rf
+            echo "Old releases cleaned"
+          '

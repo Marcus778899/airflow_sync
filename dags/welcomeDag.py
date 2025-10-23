@@ -25,11 +25,11 @@ def welcome_dag():
         op_args=['Airflow User'],
     )
 
-    bash_task = BashOperator(
+    end_task = BashOperator(
         task_id='bash_task',
         bash_command='echo "This is a bash task!"',
     )
 
-    start_time >> greet_task >> bash_task
+    start_time >> greet_task >> end_task
 
 welcome_dag()

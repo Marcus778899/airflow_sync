@@ -11,6 +11,9 @@ on:
 jobs:
   deploy:
     runs-on: self-hosted
+    defaults:
+      run:
+        shell: bash
 
     env:
       AIRFLOW_DAG_DIR: ${{ secrets.AIRFLOW_DAG_DIR }}

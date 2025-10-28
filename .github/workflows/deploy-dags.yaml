@@ -30,57 +30,57 @@ jobs:
       - name: Create release & upload DAGs
         run: |
           TS=$(date -u +%Y%m%d_%H%M%S)
-          REMOTE_RELEASE="${AIRFLOW_RELEASES_DIR}/${TS}"
           echo "TS=${TS}" >> $GITHUB_ENV
+          REMOTE_RELEASE="${AIRFLOW_RELEASES_DIR}/${TS}"
 
           ssh ${SSH_USER}@${SSH_HOST} "mkdir -p ${REMOTE_RELEASE}"
-          rsync -avz --delete dags/ "airflow@${SSH_HOST}:${REMOTE_RELEASE}/"
+          rsync -avz --delete dags/ "${SSH_USER}@${SSH_HOST}:${REMOTE_RELEASE}/"
           echo "Uploaded to ${REMOTE_RELEASE}"
       
       # validate DAGs inside Airflow container before switching
       - name: Validate DAGs inside Airflow container (pre-switch)
         run: |
-          ssh ${SSH_USER}@${SSH_HOST} '\
+          ssh "${SSH_USER}@${SSH_HOST}" "
+            TS='${TS}'
             set -e
-            TS="${RELEASE_TS}"
-            [ -z "$TS" ] && TS="${TS}"
-            [ -z "$TS" ] && { echo "TS not set"; exit 1; }
 
-            echo "Finding an Airflow container..."
-            CID=$(docker ps --filter "name=airflow-apiserver" --format "{{.ID}}" | head -n 1)
-            if [ -z "$CID" ]; then
-              echo "No Airflow container found"
+            [ -z \"\$TS\" ] && { echo 'TS not set'; exit 1; }
+
+            echo 'Finding an Airflow container...'
+            CID=\$(docker ps --filter 'name=airflow-apiserver' --format '{{.ID}}' | head -n 1)
+            if [ -z \"\$CID\" ]; then
+              echo 'No Airflow container found'
               exit 1
             fi
-            echo "Container: $CID"
+            echo \"Container: \$CID\"
 
-            SUBDIR="/opt/airflow/releases/${TS}"
-            echo "Validating with: airflow dags list --subdir ${SUBDIR}"
-            docker exec "$CID" airflow dags list --subdir "${SUBDIR}" >/tmp/airflow-validate-${TS}.log 2>&1 \
-              && echo "DAG import OK" \
-              || { echo "DAG import failed"; echo "---- LOG ----"; cat /tmp/airflow-validate-${TS}.log; exit 1; }
-          '
+            SUBDIR=\"/opt/airflow/releases/\$TS\"
+            echo \"Validating with: airflow dags list --subdir \$SUBDIR\"
+            docker exec \"\$CID\" airflow dags list --subdir \"\$SUBDIR\" > /tmp/airflow-validate-\$TS.log 2>&1 \
+              && echo 'DAG import OK' \
+              || { echo 'DAG import failed'; echo '---- LOG ----'; cat /tmp/airflow-validate-\$TS.log; exit 1; }
+          "
       
       # Atomically switches the symbolic link dags->releases/<timestamp>
       - name: Switch symlink atomically
         run: |
-          ssh ${SSH_USER}@${SSH_HOST} '\
+          ssh "${SSH_USER}@${SSH_HOST}" "
             set -e
-            CURRENT_LINK="${AIRFLOW_DAG_DIR}"
-            NEW_RELEASE="${AIRFLOW_RELEASES_DIR}/${RELEASE_TS}"
+            CURRENT_LINK='${AIRFLOW_DAG_DIR}'
+            NEW_RELEASE='${AIRFLOW_RELEASES_DIR}/${TS}'
 
-            echo "Switching symlink: ${CURRENT_LINK} -> ${NEW_RELEASE}"
-            [ -d "${NEW_RELEASE}" ] || { echo "Release not found: ${NEW_RELEASE}"; exit 1; }
+            echo \"Switching symlink: \$CURRENT_LINK -> \$NEW_RELEASE\"
+            [ -d \"\$NEW_RELEASE\" ] || { echo \"Release not found: \$NEW_RELEASE\"; exit 1; }
 
-            ln -sfn "${NEW_RELEASE}" "${CURRENT_LINK}"
-            find "${CURRENT_LINK}" -type f -name "*.py" -exec touch {} +
-            echo " Symlink updated successfully"
-          '
+            ln -sfn \"\$NEW_RELEASE\" \"\$CURRENT_LINK\"
+            find \"\$CURRENT_LINK\" -type f -name '*.py' -exec touch {} +
+            echo 'Symlink updated successfully'
+          "
 
       # service health check
       - name: Airflow service health check
         run: |
-          ssh ${SSH_USER}@${SSH_HOST} '\
+          ssh "${SSH_USER}@${SSH_HOST}" '
             set -e
             echo "Checking Airflow container..."
             CID=$(docker ps --filter "name=airflow-apiserver" --format "{{.ID}}" | head -n 1)
@@ -98,10 +98,10 @@ jobs:
 
       - name: Cleanup old releases (keep last 5)
         run: |
-          ssh ${SSH_USER}@${SSH_HOST} '\
+          ssh "${SSH_USER}@${SSH_HOST}" '
             set -e
             echo "Cleaning up old releases, keeping last 5..."
-            cd "${AIRFLOW_RELEASES_DIR}"
+            cd "'"${AIRFLOW_RELEASES_DIR}"'"
             ls -1t | tail -n +6 | xargs -r rm -rf
             echo "Old releases cleaned"
           '

@@ -21,12 +21,12 @@ jobs:
       SSH_HOST: ${{ secrets.SSH_HOST }}
       SSH_USER: ${{ secrets.SSH_USER }}
       SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # create release directory and upload DAGs
+      # 1. upload DAGs to new release folder
       - name: Create release & upload DAGs
         run: |
           TS=$(date -u +%Y%m%d_%H%M%S)
@@ -34,74 +34,73 @@ jobs:
           REMOTE_RELEASE="${AIRFLOW_RELEASES_DIR}/${TS}"
 
           ssh ${SSH_USER}@${SSH_HOST} "mkdir -p ${REMOTE_RELEASE}"
-          rsync -avz --delete dags/ "${SSH_USER}@${SSH_HOST}:${REMOTE_RELEASE}/"
+          rsync -avz --delete dags/ ${SSH_USER}@${SSH_HOST}:${REMOTE_RELEASE}/
           echo "Uploaded to ${REMOTE_RELEASE}"
-      
-      # validate DAGs inside Airflow container before switching
-      - name: Validate DAGs inside Airflow container (pre-switch)
+
+      # 2. check uploaded files
+      - name: Validate uploaded DAGs (pre-switch)
         run: |
-          ssh "${SSH_USER}@${SSH_HOST}" "
-            TS='${TS}'
-            set -e
+          ssh ${SSH_USER}@${SSH_HOST} "set -e
+            SUBDIR=/opt/airflow/releases/${TS}
+            echo Checking DAG files in: \$SUBDIR
+            if [ ! -d \$SUBDIR ]; then
+              echo 'Release folder not found!'
+              exit 1
+            fi
+            echo Folder exists. Listing contents:
+            ls -al \$SUBDIR
+          "
 
-            [ -z \"\$TS\" ] && { echo 'TS not set'; exit 1; }
+      # 3. switch symlink and refresh DAGs
+      - name: Switch symlink atomically
+        run: |
+          ssh ${SSH_USER}@${SSH_HOST} "set -e
+            CURRENT_LINK=${AIRFLOW_DAG_DIR}
+            NEW_RELEASE=${AIRFLOW_RELEASES_DIR}/${TS}
 
-            echo 'Finding an Airflow container...'
+            echo Switching symlink: \$CURRENT_LINK -> \$NEW_RELEASE
+            if [ ! -d \$NEW_RELEASE ]; then
+              echo 'Release not found: '\$NEW_RELEASE
+              exit 1
+            fi
+
+            ln -sfn \$NEW_RELEASE \$CURRENT_LINK
+            find \$CURRENT_LINK -type f -name '*.py' -exec touch {} +
+            echo Symlink updated successfully
+
             CID=\$(docker ps --filter 'name=airflow-apiserver' --format '{{.ID}}' | head -n 1)
-            if [ -z \"\$CID\" ]; then
+            if [ -z \$CID ]; then
               echo 'No Airflow container found'
               exit 1
             fi
-            echo \"Container: \$CID\"
+            echo Found container \$CID
 
-            SUBDIR=\"/opt/airflow/releases/\$TS\"
-            echo \"Validating with: airflow dags list --subdir \$SUBDIR\"
-            docker exec \"\$CID\" airflow dags list --subdir \"\$SUBDIR\" > /tmp/airflow-validate-\$TS.log 2>&1 \
-              && echo 'DAG import OK' \
-              || { echo 'DAG import failed'; echo '---- LOG ----'; cat /tmp/airflow-validate-\$TS.log; exit 1; }
-          "
-      
-      # Atomically switches the symbolic link dags->releases/<timestamp>
-      - name: Switch symlink atomically
-        run: |
-          ssh "${SSH_USER}@${SSH_HOST}" "
-            set -e
-            CURRENT_LINK='${AIRFLOW_DAG_DIR}'
-            NEW_RELEASE='${AIRFLOW_RELEASES_DIR}/${TS}'
-
-            echo \"Switching symlink: \$CURRENT_LINK -> \$NEW_RELEASE\"
-            [ -d \"\$NEW_RELEASE\" ] || { echo \"Release not found: \$NEW_RELEASE\"; exit 1; }
-
-            ln -sfn \"\$NEW_RELEASE\" \"\$CURRENT_LINK\"
-            find \"\$CURRENT_LINK\" -type f -name '*.py' -exec touch {} +
-            echo 'Symlink updated successfully'
+            echo Refreshing DAGs...
+            docker exec \$CID airflow dags list >/dev/null 2>&1 &&
+              echo Airflow DAGs loaded successfully ||
+              (echo Airflow DAGs load failed && exit 1)
           "
 
-      # service health check
+      # 4. health check
       - name: Airflow service health check
         run: |
-          ssh "${SSH_USER}@${SSH_HOST}" '
-            set -e
-            echo "Checking Airflow container..."
-            CID=$(docker ps --filter "name=airflow-apiserver" --format "{{.ID}}" | head -n 1)
-            if [ -z "$CID" ]; then
-              echo "Airflow container not found!"
+          ssh ${SSH_USER}@${SSH_HOST} "set -e
+            CID=\$(docker ps --filter 'name=airflow-apiserver' --format '{{.ID}}' | head -n 1)
+            if [ -z \$CID ]; then
+              echo 'Airflow container not found!'
               exit 1
             fi
-            echo "Found container $CID"
+            echo Found container \$CID
+            docker exec \$CID airflow dags list >/dev/null 2>&1 &&
+              echo Airflow DAGs loaded successfully ||
+              (echo Airflow DAGs load failed && exit 1)
+          "
 
-            echo "Verifying DAGs inside container..."
-            docker exec $CID airflow dags list >/dev/null 2>&1 \
-              && echo "Airflow DAGs loaded successfully" \
-              || (echo "Airflow DAGs load failed" && exit 1)
-          '
-
+      # 5. cleanup old versions
       - name: Cleanup old releases (keep last 5)
         run: |
-          ssh "${SSH_USER}@${SSH_HOST}" '
-            set -e
-            echo "Cleaning up old releases, keeping last 5..."
-            cd "'"${AIRFLOW_RELEASES_DIR}"'"
+          ssh ${SSH_USER}@${SSH_HOST} "set -e
+            cd ${AIRFLOW_RELEASES_DIR}
             ls -1t | tail -n +6 | xargs -r rm -rf
-            echo "Old releases cleaned"
-          '
+            echo Old releases cleaned
+          "

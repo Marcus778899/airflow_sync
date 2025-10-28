@@ -15,7 +15,7 @@ def Hello(name: str):
 @dag(dag_id="test_dag", default_args=default_args, catchup=False, tags=['test_dag'])
 def welcome_dag():
 
-    start_time = BashOperator(
+    start_task = BashOperator(
         task_id='start_time', 
         bash_command='date > /opt/airflow/test.txt'
     )
@@ -30,6 +30,6 @@ def welcome_dag():
         bash_command='echo "This is a bash task!"',
     )
 
-    start_time >> greet_task >> end_task
+    start_task >> greet_task >> end_task
 
 welcome_dag()

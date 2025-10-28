@@ -20,6 +20,7 @@ jobs:
       AIRFLOW_RELEASES_DIR: ${{ secrets.AIRFLOW_RELEASES_DIR }}
       SSH_HOST: ${{ secrets.SSH_HOST }}
       SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
     
     steps:
       - name: Checkout repository
@@ -95,7 +96,7 @@ jobs:
               || (echo "Airflow DAGs load failed" && exit 1)
           '
 
-      - name: (Optional) Cleanup old releases (keep last 5)
+      - name: Cleanup old releases (keep last 5)
         run: |
           ssh ${SSH_USER}@${SSH_HOST} '\
             set -e

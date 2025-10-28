@@ -15,21 +15,21 @@ def Hello(name: str):
 @dag(dag_id="test_dag", default_args=default_args, catchup=False, tags=['test_dag'])
 def welcome_dag():
 
-    start_task = BashOperator(
+    start = BashOperator(
         task_id='start_time', 
         bash_command='date > /opt/airflow/test.txt'
     )
-    greet_task = PythonOperator(
+    greet = PythonOperator(
         task_id='greet_task',
         python_callable=Hello,
         op_args=['Airflow User'],
     )
 
-    end_task = BashOperator(
+    end = BashOperator(
         task_id='bash_task',
         bash_command='echo "This is a bash task!"',
     )
 
-    start_task >> greet_task >> end_task
+    start >> greet >> end
 
 welcome_dag()

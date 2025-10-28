@@ -26,7 +26,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 1. upload DAGs to new release folder
+      # upload DAGs to new release folder
       - name: Create release & upload DAGs
         run: |
           TS=$(date -u +%Y%m%d_%H%M%S)
@@ -35,15 +35,14 @@ jobs:
           echo "Uploading DAGs to ${REMOTE_RELEASE} ..."
 
           ssh ${SSH_USER}@${SSH_HOST} "mkdir -p ${REMOTE_RELEASE}"
-          ls -al ${REMOTE_RELEASE}
           rsync -avz --delete dags/ ${SSH_USER}@${SSH_HOST}:${REMOTE_RELEASE}/
           echo "Uploaded to ${REMOTE_RELEASE}"
 
-      # 2. check uploaded files
+      # check uploaded files
       - name: Validate uploaded DAGs (pre-switch)
         run: |
           ssh ${SSH_USER}@${SSH_HOST} "set -e
-            SUBDIR=/opt/airflow/releases/${TS}
+            SUBDIR=${AIRFLOW_RELEASES_DIR}/${TS}
             echo "Checking DAG files in: ${SUBDIR}"
             if [ ! -d ${SUBDIR} ]; then
               echo 'Release folder not found!'
@@ -53,7 +52,7 @@ jobs:
             ls -al ${SUBDIR}
           "
 
-      # 3. switch symlink and refresh DAGs
+      # switch symlink and refresh DAGs
       - name: Switch symlink atomically
         run: |
           ssh ${SSH_USER}@${SSH_HOST} "set -e
@@ -83,7 +82,7 @@ jobs:
               (echo Airflow DAGs load failed && exit 1)
           "
 
-      # 4. health check
+      # health check
       - name: Airflow service health check
         run: |
           ssh ${SSH_USER}@${SSH_HOST} "set -e
@@ -98,7 +97,7 @@ jobs:
               (echo Airflow DAGs load failed && exit 1)
           "
 
-      # 5. cleanup old versions
+      # cleanup old versions
       - name: Cleanup old releases (keep last 5)
         run: |
           ssh ${SSH_USER}@${SSH_HOST} "set -e

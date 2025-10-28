@@ -32,8 +32,10 @@ jobs:
           TS=$(date -u +%Y%m%d_%H%M%S)
           echo "TS=${TS}" >> $GITHUB_ENV
           REMOTE_RELEASE="${AIRFLOW_RELEASES_DIR}/${TS}"
+          echo "Uploading DAGs to ${REMOTE_RELEASE} ..."
 
           ssh ${SSH_USER}@${SSH_HOST} "mkdir -p ${REMOTE_RELEASE}"
+          ls -al ${REMOTE_RELEASE}
           rsync -avz --delete dags/ ${SSH_USER}@${SSH_HOST}:${REMOTE_RELEASE}/
           echo "Uploaded to ${REMOTE_RELEASE}"
 
@@ -42,13 +44,13 @@ jobs:
         run: |
           ssh ${SSH_USER}@${SSH_HOST} "set -e
             SUBDIR=/opt/airflow/releases/${TS}
-            echo Checking DAG files in: \$SUBDIR
-            if [ ! -d \$SUBDIR ]; then
+            echo "Checking DAG files in: ${SUBDIR}"
+            if [ ! -d ${SUBDIR} ]; then
               echo 'Release folder not found!'
               exit 1
             fi
             echo Folder exists. Listing contents:
-            ls -al \$SUBDIR
+            ls -al ${SUBDIR}
           "
 
       # 3. switch symlink and refresh DAGs
@@ -58,25 +60,25 @@ jobs:
             CURRENT_LINK=${AIRFLOW_DAG_DIR}
             NEW_RELEASE=${AIRFLOW_RELEASES_DIR}/${TS}
 
-            echo Switching symlink: \$CURRENT_LINK -> \$NEW_RELEASE
-            if [ ! -d \$NEW_RELEASE ]; then
-              echo 'Release not found: '\$NEW_RELEASE
+            echo "Switching symlink: ${CURRENT_LINK} -> ${NEW_RELEASE}
+            if [ ! -d ${NEW_RELEASE} ]; then
+              echo 'Release not found: '${NEW_RELEASE}
               exit 1
             fi
 
-            ln -sfn \$NEW_RELEASE \$CURRENT_LINK
-            find \$CURRENT_LINK -type f -name '*.py' -exec touch {} +
+            ln -sfn ${NEW_RELEASE} ${CURRENT_LINK}
+            find ${CURRENT_LINK} -type f -name '*.py' -exec touch {} +
             echo Symlink updated successfully
 
-            CID=\$(docker ps --filter 'name=airflow-apiserver' --format '{{.ID}}' | head -n 1)
-            if [ -z \$CID ]; then
+            CID=$(docker ps --filter 'name=airflow-apiserver' --format '{{.ID}}' | head -n 1)
+            if [ -z ${CID} ]; then
               echo 'No Airflow container found'
               exit 1
             fi
-            echo Found container \$CID
+            echo Found container ${CID}
 
             echo Refreshing DAGs...
-            docker exec \$CID airflow dags list >/dev/null 2>&1 &&
+            docker exec ${CID} airflow dags list >/dev/null 2>&1 &&
               echo Airflow DAGs loaded successfully ||
               (echo Airflow DAGs load failed && exit 1)
           "
@@ -85,13 +87,13 @@ jobs:
       - name: Airflow service health check
         run: |
           ssh ${SSH_USER}@${SSH_HOST} "set -e
-            CID=\$(docker ps --filter 'name=airflow-apiserver' --format '{{.ID}}' | head -n 1)
-            if [ -z \$CID ]; then
+            CID=$(docker ps --filter 'name=airflow-apiserver' --format '{{.ID}}' | head -n 1)
+            if [ -z ${CID} ]; then
               echo 'Airflow container not found!'
               exit 1
             fi
-            echo Found container \$CID
-            docker exec \$CID airflow dags list >/dev/null 2>&1 &&
+            echo Found container ${CID}
+            docker exec ${CID} airflow dags list >/dev/null 2>&1 &&
               echo Airflow DAGs loaded successfully ||
               (echo Airflow DAGs load failed && exit 1)
           "

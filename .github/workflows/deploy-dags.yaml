@@ -56,30 +56,32 @@ jobs:
       - name: Switch symlink atomically
         run: |
           ssh ${SSH_USER}@${SSH_HOST} "set -e
-            CURRENT_LINK=${AIRFLOW_DAG_DIR}
-            NEW_RELEASE=${AIRFLOW_RELEASES_DIR}/${TS}
+            CURRENT_LINK='${AIRFLOW_DAG_DIR}'
+            NEW_RELEASE='${AIRFLOW_RELEASES_DIR}/${TS}'
 
-            echo "Switching symlink: ${CURRENT_LINK} -> ${NEW_RELEASE}
-            if [ ! -d ${NEW_RELEASE} ]; then
-              echo 'Release not found: '${NEW_RELEASE}
+            echo \"Switching symlink: ${CURRENT_LINK} -> ${NEW_RELEASE}\"
+
+            if [ ! -d \"${NEW_RELEASE}\" ]; then
+              echo 'Release not found:' \"${NEW_RELEASE}\"
               exit 1
             fi
 
-            ln -sfn ${NEW_RELEASE} ${CURRENT_LINK}
-            find ${CURRENT_LINK} -type f -name '*.py' -exec touch {} +
-            echo Symlink updated successfully
+            ln -sfn \"${NEW_RELEASE}\" \"${CURRENT_LINK}\"
+            find \"${CURRENT_LINK}\" -type f -name '*.py' -exec touch {} +
+
+            echo 'Symlink updated successfully'
 
             CID=$(docker ps --filter 'name=airflow-apiserver' --format '{{.ID}}' | head -n 1)
-            if [ -z ${CID} ]; then
+            if [ -z \"${CID}\" ]; then
               echo 'No Airflow container found'
               exit 1
             fi
-            echo Found container ${CID}
+            echo 'Found container' ${CID}
 
-            echo Refreshing DAGs...
+            echo 'Refreshing DAGs...'
             docker exec ${CID} airflow dags list >/dev/null 2>&1 &&
-              echo Airflow DAGs loaded successfully ||
-              (echo Airflow DAGs load failed && exit 1)
+              echo 'Airflow DAGs loaded successfully' ||
+              (echo 'Airflow DAGs load failed' && exit 1)
           "
 
       # health check

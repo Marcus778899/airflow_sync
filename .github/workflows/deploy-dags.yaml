@@ -24,7 +24,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Sync DAGs to new release
+      - name: Prepare Release (Backup)
         run: |
           TS=$(date -u +%Y%m%d_%H%M%S)
           echo "TS=$TS" >> $GITHUB_ENV
@@ -32,24 +32,30 @@ jobs:
           RELEASE_DIR="${AIRFLOW_RELEASES_DIR}/${TS}"
           mkdir -p "$RELEASE_DIR"
 
-          echo "Syncing DAGs using rsync..."
+          echo "Copying DAGs to release folder: $RELEASE_DIR"
           rsync -av --delete dags/ "$RELEASE_DIR"/
 
-          echo "DAGs synced to: $RELEASE_DIR"
-          ls -al "$RELEASE_DIR"
-
-      - name: Switch symlink atomically
+      - name: Deploy to Live Directory (Rsync)
         run: |
-          CURRENT_LINK="${AIRFLOW_DAG_DIR}"
+          CURRENT_DIR="${AIRFLOW_DAG_DIR}"
           NEW_RELEASE="${AIRFLOW_RELEASES_DIR}/${TS}"
 
-          echo "Switching symlink: ${CURRENT_LINK} -> ${NEW_RELEASE}"
-          ln -sfn "$NEW_RELEASE" "$CURRENT_LINK"
+          echo "Deploying from ${NEW_RELEASE} to ${CURRENT_DIR}..."
 
-          # Trigger DAG reload
-          find "$CURRENT_LINK" -type f -name '*.py' -exec touch {} +
+          if [ -L "$CURRENT_DIR" ]; then
+            echo "Detected symlink at ${CURRENT_DIR}. Removing it to replace with directory..."
+            rm "$CURRENT_DIR"
+          fi
 
-          echo "Symlink updated."
+          mkdir -p "$CURRENT_DIR"
+
+          rsync -a --delete "$NEW_RELEASE/" "$CURRENT_DIR/"
+
+          # Trigger DAG reload 
+          find "$CURRENT_DIR" -type f -name '*.py' -exec touch {} +
+
+          echo "DAGs deployed successfully to: $CURRENT_DIR"
+          ls -al "$CURRENT_DIR"
 
       - name: Refresh DAGs inside Airflow container
         run: |
@@ -60,7 +66,7 @@ jobs:
             exit 1
           fi
 
-          echo "Refreshing DAG list..."
+          echo "Refreshing DAG list in container $CID..."
           docker exec "$CID" airflow dags list >/dev/null 2>&1 &&
             echo "DAGs loaded successfully." ||
             (echo "Failed to load DAGs!" && exit 1)

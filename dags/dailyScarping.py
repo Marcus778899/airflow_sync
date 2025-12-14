@@ -21,7 +21,7 @@ with DAG(
     dag_id='binance_kline_sync_v1',
     default_args=default_args,
     description='Sync historical and daily kline data from Binance',
-    schedule_interval='@daily',
+    schedule='@daily',
     start_date=pendulum.datetime(2020, 1, 1, tz=TZ),
     catchup=True,                   
     max_active_runs=1,               
@@ -35,7 +35,7 @@ with DAG(
             "endTime": "{{ data_interval_end.isoformat() }}"
         }
 
-    task = HttpOperator(
+        HttpOperator(
             task_id=f'sync_{symbol.lower()}',
             http_conn_id=CONN_ID,
             endpoint='/api/v1/batch/klines',
